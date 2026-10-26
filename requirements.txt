@@ -7,4 +7,3 @@ xgboost
 catboost
 flask
 dill
--e .
