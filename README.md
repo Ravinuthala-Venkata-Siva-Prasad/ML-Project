@@ -28,8 +28,8 @@ This project demonstrates a complete machine learning workflow, from data prepro
 ## Installation
 
 ```bash
-git clone https://github.com/Ravinuthala-Venkata-Siva-Prasad/ML-Project.git
-cd ML-Project
+git clone https://github.com/Ravinuthala-Venkata-Siva-Prasad/Student-Performance-Prediction.git
+cd Student-Performance-Prediction
 pip install -r requirements.txt
 ```
 
