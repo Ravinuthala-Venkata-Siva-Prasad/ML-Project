@@ -1,62 +1,73 @@
 import os
 import sys
-
-import numpy as np 
-import pandas as pd
-import dill
 import pickle
+
+from sklearn.model_selection import GridSearchCV, KFold
 from sklearn.metrics import r2_score
-from sklearn.model_selection import GridSearchCV
 
 from src.exception import CustomException
+from src.logger import logger
+
 
 def save_object(file_path, obj):
     try:
-        dir_path = os.path.dirname(file_path)
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
 
-        os.makedirs(dir_path, exist_ok=True)
+        with open(file_path, "wb") as file:
+            pickle.dump(obj, file)
 
-        with open(file_path, "wb") as file_obj:
-            pickle.dump(obj, file_obj)
+        logger.info("Object saved to %s", file_path)
 
     except Exception as e:
-        raise CustomException(e, sys)
-    
-def evaluate_models(X_train, y_train,X_test,y_test,models,param):
+        raise CustomException(e, sys) from e
+
+
+def load_object(file_path):
+    try:
+        with open(file_path, "rb") as file:
+            return pickle.load(file)
+
+    except Exception as e:
+        raise CustomException(e, sys) from e
+
+
+def evaluate_models(X_train, y_train, models, params):
     try:
         report = {}
 
-        for i in range(len(list(models))):
-            model = list(models.values())[i]
-            para=param[list(models.keys())[i]]
+        cv = KFold(
+            n_splits=5,
+            shuffle=True,
+            random_state=42,
+        )
 
-            gs = GridSearchCV(model,para,cv=3)
-            gs.fit(X_train,y_train)
+        for model_name, model in models.items():
+            logger.info("Evaluating model: %s", model_name)
 
-            model.set_params(**gs.best_params_)
-            model.fit(X_train,y_train)
+            search = GridSearchCV(
+                estimator=model,
+                param_grid=params.get(model_name, {}),
+                scoring="r2",
+                cv=cv,
+                n_jobs=-1,
+                error_score="raise",
+            )
 
-            #model.fit(X_train, y_train)  # Train model
+            search.fit(X_train, y_train)
 
-            y_train_pred = model.predict(X_train)
+            report[model_name] = {
+                "model": search.best_estimator_,
+                "cv_score": search.best_score_,
+                "best_params": search.best_params_,
+            }
 
-            y_test_pred = model.predict(X_test)
-
-            train_model_score = r2_score(y_train, y_train_pred)
-
-            test_model_score = r2_score(y_test, y_test_pred)
-
-            report[list(models.keys())[i]] = test_model_score
+            logger.info(
+                "%s cross-validation R2: %.4f",
+                model_name,
+                search.best_score_,
+            )
 
         return report
 
     except Exception as e:
-        raise CustomException(e, sys)
-    
-def load_object(file_path):
-    try:
-        with open(file_path, "rb") as file_obj:
-            return pickle.load(file_obj)
-
-    except Exception as e:
-        raise CustomException(e, sys)
+        raise CustomException(e, sys) from e

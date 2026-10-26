@@ -1,61 +1,102 @@
-import os
 import sys
-from src.exception import CustomException
-from src.logger import logging
-import pandas as pd
-
-from sklearn.model_selection import train_test_split
+from pathlib import Path
 from dataclasses import dataclass
 
-from src.components.data_transformation import DataTransformation
-from src.components.data_transformation import DataTransformationConfig
+import pandas as pd
+from sklearn.model_selection import train_test_split
 
-from src.components.model_trainer import ModelTrainer
-from src.components.model_trainer import ModelTrainerConfig
+from src.exception import CustomException
+from src.logger import logger
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
 
 @dataclass
 class DataIngestionConfig:
-    train_data_path: str=os.path.join('artifacts',"train.csv")
-    test_data_path: str=os.path.join('artifacts',"test.csv")
-    raw_data_path: str=os.path.join('artifacts',"data.csv")
+    train_data_path: str = str(
+        PROJECT_ROOT / "artifacts" / "train.csv"
+    )
+    test_data_path: str = str(
+        PROJECT_ROOT / "artifacts" / "test.csv"
+    )
+    raw_data_path: str = str(
+        PROJECT_ROOT / "artifacts" / "data.csv"
+    )
+
 
 class DataIngestion:
     def __init__(self):
-        self.ingestion_config=DataIngestionConfig()
+        self.ingestion_config = DataIngestionConfig()
 
-    def initate_data_ingestion(self):
-        logging.info("Entered the data ingestion methond or component")
-
+    def initiate_data_ingestion(self):
         try:
-            df=pd.read_csv('notebook/data/stud.csv')
-            logging.info('Read the dataset as dataframe')
+            data_path = PROJECT_ROOT / "notebook" / "data" / "stud.csv"
 
-            os.makedirs(os.path.dirname(self.ingestion_config.train_data_path),exist_ok=True)
-            df.to_csv(self.ingestion_config.raw_data_path,index=False,header=True)
+            logger.info("Reading dataset: %s", data_path)
 
-            logging.info("Train Test split initiated")
-            train_set,test_set=train_test_split(df,test_size=0.2,random_state=42)
+            if not data_path.exists():
+                raise FileNotFoundError(
+                    f"Dataset not found: {data_path}"
+                )
 
-            train_set.to_csv(self.ingestion_config.train_data_path,index=False,header=True)
-            test_set.to_csv(self.ingestion_config.test_data_path,index=False,header=True)
+            df = pd.read_csv(data_path)
 
-            logging.info("Ingestion of the data iss completed")
+            if df.empty:
+                raise ValueError("The dataset is empty.")
 
-            return(
-                self.ingestion_config.train_data_path,
-                self.ingestion_config.test_data_path
+            required_columns = {
+                "gender",
+                "race_ethnicity",
+                "parental_level_of_education",
+                "lunch",
+                "test_preparation_course",
+                "reading_score",
+                "writing_score",
+                "math_score",
+            }
+
+            missing = required_columns - set(df.columns)
+
+            if missing:
+                raise ValueError(
+                    f"Missing required columns: {sorted(missing)}"
+                )
+
+            output_dir = PROJECT_ROOT / "artifacts"
+            output_dir.mkdir(parents=True, exist_ok=True)
+
+            df.to_csv(
+                self.ingestion_config.raw_data_path,
+                index=False,
             )
+
+            train_df, test_df = train_test_split(
+                df,
+                test_size=0.2,
+                random_state=42,
+            )
+
+            train_df.to_csv(
+                self.ingestion_config.train_data_path,
+                index=False,
+            )
+            test_df.to_csv(
+                self.ingestion_config.test_data_path,
+                index=False,
+            )
+
+            logger.info(
+                "Data ingestion complete. Train rows: %d; test rows: %d",
+                len(train_df),
+                len(test_df),
+            )
+
+            return (
+                self.ingestion_config.train_data_path,
+                self.ingestion_config.test_data_path,
+            )
+
         except Exception as e:
-            raise CustomException(e,sys)
-
-if __name__=="__main__":
-    obj=DataIngestion()
-    train_data,test_data=obj.initate_data_ingestion()
-
-    data_transformation=DataTransformation()
-    train_arr,test_arr,_=data_transformation.initiate_data_transformation(train_data,test_data)
-
-    modeltrainer=ModelTrainer()
-    print(modeltrainer.initate_model_trainer(train_arr,test_arr))
-
-    
+            logger.exception("Data ingestion failed")
+            raise CustomException(e, sys) from e
