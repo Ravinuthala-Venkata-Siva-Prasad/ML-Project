@@ -126,7 +126,6 @@ jobs:
             --query "service.{Status:status,ActiveConfigurations:activeConfigurations}" \
             --output json \
             --no-cli-pager
-
       - name: Deployment request submitted
         run: |
           echo "ECS Express update request completed."
