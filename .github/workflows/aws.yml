@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: student-performance-deployment
+  group: student-performance-ecs-deployment
   cancel-in-progress: false
 
 env:
@@ -21,12 +21,41 @@ env:
 
 jobs:
   deploy:
-    name: Build and Deploy to AWS
+    name: Build and Deploy to AWS ECS Express
     runs-on: [self-hosted, Linux, X64]
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Install AWS CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if ! command -v aws >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y curl unzip
+
+            curl -fsSL \
+              https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip \
+              -o /tmp/awscliv2.zip
+
+            mkdir -p /tmp/awscli-install
+            unzip -q -o /tmp/awscliv2.zip \
+              -d /tmp/awscli-install
+
+            sudo /tmp/awscli-install/aws/install
+          fi
+
+          aws --version
+
+      - name: Check Docker installation
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker --version
+          docker info
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -45,6 +74,7 @@ jobs:
 
       - name: Build and push Docker image
         id: build-image
+        shell: bash
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           IMAGE_TAG: ${{ github.sha }}
@@ -53,28 +83,51 @@ jobs:
 
           IMAGE="$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
 
+          echo "Building Docker image..."
           docker build -t "$IMAGE" .
+
+          echo "Pushing image to Amazon ECR..."
           docker push "$IMAGE"
 
           echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
 
       - name: Deploy to ECS Express
+        shell: bash
         env:
           IMAGE: ${{ steps.build-image.outputs.image }}
         run: |
           set -euo pipefail
 
+          CONTAINER_CONFIG=$(jq -n \
+            --arg image "$IMAGE" \
+            --arg logGroup "/aws/ecs/default/simple-docker-service-06ffe82bb7d7-0d7b-dc5b" \
+            '{
+              image: $image,
+              containerPort: 5000,
+              awsLogsConfiguration: {
+                logGroup: $logGroup,
+                logStreamPrefix: "ecs"
+              },
+              environment: []
+            }')
+
           aws ecs update-express-gateway-service \
             --service-arn "$ECS_SERVICE_ARN" \
-            --primary-container "image=$IMAGE,containerPort=5000,awsLogsConfiguration={logGroup=/aws/ecs/default/simple-docker-service-06ffe82bb7d7-0d7b-dc5b,logStreamPrefix=ecs}" \
+            --primary-container "$CONTAINER_CONFIG" \
             --region "$AWS_REGION" \
             --no-cli-pager
 
-      - name: Show ECS Express status
+      - name: Check ECS Express status
+        shell: bash
         run: |
           aws ecs describe-express-gateway-service \
             --service-arn "$ECS_SERVICE_ARN" \
             --region "$AWS_REGION" \
-            --query "service.status" \
+            --query "service.{Status:status,ActiveConfigurations:activeConfigurations}" \
             --output json \
             --no-cli-pager
+
+      - name: Deployment request submitted
+        run: |
+          echo "ECS Express update request completed."
+          echo "Verify service health and application availability."
