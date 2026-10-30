@@ -1,132 +1,75 @@
-
-name: Deploy Student Performance Prediction to AWS ECS Express
+name: Build and Deploy to AWS ECS Express
 
 on:
   push:
     branches:
       - main
+
   workflow_dispatch:
 
 permissions:
+  id-token: write
   contents: read
 
-concurrency:
-  group: student-performance-ecs-deployment
-  cancel-in-progress: false
-
 env:
-  AWS_REGION: ap-southeast-2
+  AWS_REGION: ap-south-1
   ECR_REPOSITORY: student-performance-prediction
-  ECS_SERVICE_ARN: arn:aws:ecs:ap-southeast-2:316992254617:service/default/simple-docker-service-06ffe82bb7d7-0d7b
+  ECS_CLUSTER: student-performance-cluster
+  ECS_SERVICE: student-performance-service
 
 jobs:
   deploy:
-    name: Build and Deploy to AWS ECS Express
-    runs-on: [self-hosted, Linux, X64]
+    name: Build and Deploy ML Application
+    runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+
+      # Step 1: Checkout GitHub Repository
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Install AWS CLI
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          if ! command -v aws >/dev/null 2>&1; then
-            sudo apt-get update
-            sudo apt-get install -y curl unzip
-
-            curl -fsSL \
-              https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip \
-              -o /tmp/awscliv2.zip
-
-            mkdir -p /tmp/awscli-install
-            unzip -q -o /tmp/awscliv2.zip \
-              -d /tmp/awscli-install
-
-            sudo /tmp/awscli-install/aws/install
-          fi
-
-          aws --version
-
-      - name: Check Docker installation
-        shell: bash
-        run: |
-          set -euo pipefail
-          docker --version
-          docker info
-
-      - name: Configure AWS credentials
+      # Step 2: Configure AWS Credentials
+      - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Verify AWS identity
-        run: |
-          aws sts get-caller-identity
-
+      # Step 3: Login to Amazon ECR
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build and push Docker image
-        id: build-image
-        shell: bash
-        env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          IMAGE_TAG: ${{ github.sha }}
+      # Step 4: Generate Image Tag
+      - name: Generate Image Tag
+        run: echo "IMAGE_TAG=${GITHUB_SHA::7}" >> $GITHUB_ENV
+
+      # Step 5: Build Docker Image
+      - name: Build Docker Image
         run: |
-          set -euo pipefail
+          docker build \
+            -t ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }} .
 
-          IMAGE="$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
-
-          echo "Building Docker image..."
-          docker build -t "$IMAGE" .
-
-          echo "Pushing image to Amazon ECR..."
-          docker push "$IMAGE"
-
-          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
-
-      - name: Deploy to ECS Express
-        shell: bash
-        env:
-          IMAGE: ${{ steps.build-image.outputs.image }}
+      # Step 6: Push Docker Image to Amazon ECR
+      - name: Push Docker Image
         run: |
-          set -euo pipefail
+          docker push \
+            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
 
-          CONTAINER_CONFIG=$(jq -n \
-            --arg image "$IMAGE" \
-            --arg logGroup "/aws/ecs/default/simple-docker-service-06ffe82bb7d7-0d7b-dc5b" \
-            '{
-              image: $image,
-              containerPort: 5000,
-              awsLogsConfiguration: {
-                logGroup: $logGroup,
-                logStreamPrefix: "ecs"
-              },
-              environment: []
-            }')
+      # Step 7: Deploy to Amazon ECS Express
+      - name: Deploy to Amazon ECS Express
+        uses: aws-actions/amazon-ecs-deploy-express-service@v1
+        with:
+          service-name: ${{ env.ECS_SERVICE }}
+          image: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
+          execution-role-arn: ${{ secrets.ECS_EXECUTION_ROLE_ARN }}
+          infrastructure-role-arn: ${{ secrets.ECS_INFRASTRUCTURE_ROLE_ARN }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          container-port: 5000
+          cpu: '512'
+          memory: '1024'
 
-          aws ecs update-express-gateway-service \
-            --service-arn "$ECS_SERVICE_ARN" \
-            --primary-container "$CONTAINER_CONFIG" \
-            --region "$AWS_REGION" \
-            --no-cli-pager
-
-      - name: Check ECS Express status
-        shell: bash
+      # Step 8: Deployment Complete
+      - name: Deployment Completed
         run: |
-          aws ecs describe-express-gateway-service \
-            --service-arn "$ECS_SERVICE_ARN" \
-            --region "$AWS_REGION" \
-            --query "service.{Status:status,ActiveConfigurations:activeConfigurations}" \
-            --output json \
-            --no-cli-pager
-      - name: Deployment request submitted
-        run: |
-          echo "ECS Express update request completed."
-          echo "Verify service health and application availability."
+          echo "Student Performance Prediction deployed successfully!"
