@@ -1,10 +1,10 @@
+
 name: Build and Deploy to AWS ECS Express
 
 on:
   push:
     branches:
       - main
-
   workflow_dispatch:
 
 permissions:
@@ -12,10 +12,10 @@ permissions:
   contents: read
 
 env:
-  AWS_REGION: ap-south-1
+  AWS_REGION: ap-southeast-2
   ECR_REPOSITORY: student-performance-prediction
-  ECS_CLUSTER: student-performance-cluster
-  ECS_SERVICE: student-performance-service
+  ECS_CLUSTER: default
+  ECS_SERVICE: simple-docker-service-06ffe82bb7d7-0d7b
 
 jobs:
   deploy:
@@ -23,53 +23,42 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-
-      # Step 1: Checkout GitHub Repository
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # Step 2: Configure AWS Credentials
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      # Step 3: Login to Amazon ECR
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      # Step 4: Generate Image Tag
-      - name: Generate Image Tag
-        run: echo "IMAGE_TAG=${GITHUB_SHA::7}" >> $GITHUB_ENV
-
-      # Step 5: Build Docker Image
-      - name: Build Docker Image
+      - name: Build and Push Docker Image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
         run: |
-          docker build \
-            -t ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }} .
+          IMAGE="$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+          docker build --progress=plain -t "$IMAGE" .
+          docker push "$IMAGE"
 
-      # Step 6: Push Docker Image to Amazon ECR
-      - name: Push Docker Image
-        run: |
-          docker push \
-            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
-
-      # Step 7: Deploy to Amazon ECS Express
-      - name: Deploy to Amazon ECS Express
+      - name: Deploy to ECS Express
         uses: aws-actions/amazon-ecs-deploy-express-service@v1
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
         with:
           service-name: ${{ env.ECS_SERVICE }}
-          image: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          image: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
           execution-role-arn: ${{ secrets.ECS_EXECUTION_ROLE_ARN }}
           infrastructure-role-arn: ${{ secrets.ECS_INFRASTRUCTURE_ROLE_ARN }}
-          cluster: ${{ env.ECS_CLUSTER }}
           container-port: 5000
+          health-check-path: /
           cpu: '512'
           memory: '1024'
 
-      # Step 8: Deployment Complete
       - name: Deployment Completed
-        run: |
-          echo "Student Performance Prediction deployed successfully!"
+        run: echo "Deployment action completed."
