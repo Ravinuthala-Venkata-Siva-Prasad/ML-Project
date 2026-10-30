@@ -1,5 +1,5 @@
 
-name: Build and Deploy to AWS ECS Express
+name: Build and Deploy Student Performance Prediction to AWS ECS Express
 
 on:
   push:
@@ -8,57 +8,105 @@ on:
   workflow_dispatch:
 
 permissions:
-  id-token: write
   contents: read
+
+concurrency:
+  group: student-performance-ecs-deployment
+  cancel-in-progress: false
 
 env:
   AWS_REGION: ap-southeast-2
   ECR_REPOSITORY: student-performance-prediction
-  ECS_CLUSTER: default
-  ECS_SERVICE: simple-docker-service-06ffe82bb7d7-0d7b
+  ECS_SERVICE_ARN: arn:aws:ecs:ap-southeast-2:316992254617:service/default/simple-docker-service-06ffe82bb7d7-0d7b
 
 jobs:
   deploy:
-    name: Build and Deploy ML Application
-    runs-on: ubuntu-latest
+    name: Build and Deploy to AWS ECS Express
+    runs-on: [self-hosted, Linux, X64]
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
+      - name: Verify Docker
+        run: |
+          docker --version
+          docker info
+
+      - name: Verify AWS CLI
+        run: |
+          aws --version
+
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
+
+      - name: Verify AWS Identity
+        run: |
+          aws sts get-caller-identity
 
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
       - name: Build and Push Docker Image
+        id: build-image
+        shell: bash
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
+          set -euo pipefail
+
           IMAGE="$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+
+          echo "Building Docker image..."
           docker build --progress=plain -t "$IMAGE" .
+
+          echo "Pushing image to ECR..."
           docker push "$IMAGE"
 
-      - name: Deploy to ECS Express
-        uses: aws-actions/amazon-ecs-deploy-express-service@v1
-        env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-        with:
-          service-name: ${{ env.ECS_SERVICE }}
-          cluster: ${{ env.ECS_CLUSTER }}
-          image: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
-          execution-role-arn: ${{ secrets.ECS_EXECUTION_ROLE_ARN }}
-          infrastructure-role-arn: ${{ secrets.ECS_INFRASTRUCTURE_ROLE_ARN }}
-          container-port: 5000
-          health-check-path: /
-          cpu: '512'
-          memory: '1024'
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
 
-      - name: Deployment Completed
-        run: echo "Deployment action completed."
+      - name: Deploy to ECS Express
+        shell: bash
+        env:
+          IMAGE: ${{ steps.build-image.outputs.image }}
+        run: |
+          set -euo pipefail
+
+          CONTAINER_CONFIG=$(jq -n \
+            --arg image "$IMAGE" \
+            --arg logGroup "/aws/ecs/default/simple-docker-service-06ffe82bb7d7-0d7b-dc5b" \
+            '{
+              image: $image,
+              containerPort: 5000,
+              awsLogsConfiguration: {
+                logGroup: $logGroup,
+                logStreamPrefix: "ecs"
+              },
+              environment: []
+            }')
+
+          aws ecs update-express-gateway-service \
+            --service-arn "$ECS_SERVICE_ARN" \
+            --primary-container "$CONTAINER_CONFIG" \
+            --region "$AWS_REGION" \
+            --no-cli-pager
+
+      - name: Check ECS Express Status
+        run: |
+          aws ecs describe-express-gateway-service \
+            --service-arn "$ECS_SERVICE_ARN" \
+            --region "$AWS_REGION" \
+            --query "service.{Status:status,ActiveConfigurations:activeConfigurations}" \
+            --output json \
+            --no-cli-pager
+
+      - name: Deployment Summary
+        if: success()
+        run: |
+          echo "ECS Express deployment request submitted successfully."
