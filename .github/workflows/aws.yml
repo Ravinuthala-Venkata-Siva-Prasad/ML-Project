@@ -1,5 +1,5 @@
 
-name: Deploy to AWS ECS Express
+name: Deploy Student Performance Prediction to ECS Express
 
 on:
   push:
@@ -45,12 +45,12 @@ jobs:
           docker push "$IMAGE"
           echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
 
-      - name: Update ECS Express service
+      - name: Deploy to ECS Express
         env:
           IMAGE: ${{ steps.build-image.outputs.image }}
         run: |
           aws ecs update-express-gateway-service \
             --service-arn "$ECS_SERVICE_ARN" \
-            --primary-container "image=$IMAGE" \
+            --primary-container "image=$IMAGE,containerPort=5000" \
             --region "$AWS_REGION" \
             --no-cli-pager
